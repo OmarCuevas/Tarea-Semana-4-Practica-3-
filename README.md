@@ -1,1 +1,124 @@
-# Tarea-Semana-4-Practica-3-
+# Laboratorio de Seguridad en Redes — Ataques L2/L3 con Scapy (Entorno Controlado)
+
+Este repositorio contiene **herramientas educativas** desarrolladas con **Scapy** para simular ataques clásicos en redes LAN y así **probar, validar y documentar controles de seguridad** en switches/infraestructura.
+
+> ⚠️ **USO EDUCATIVO / ENTORNO CONTROLADO ÚNICAMENTE**  
+> No utilices estas herramientas en redes reales sin autorización formal. El objetivo es aprender cómo se ven estos ataques y **cómo mitigarlos**.
+
+---
+
+## Contenido
+
+- [1) DHCP Rogue Server (Servidor DHCP falso)](#1-dhcp-rogue-server-servidor-dhcp-falso)
+- [2) STP Root Bridge Claim (Suplantación de Root Bridge)](#2-stp-root-bridge-claim-suplantación-de-root-bridge)
+- [3) DHCP Starvation (Agotamiento de pool DHCP)](#3-dhcp-starvation-agotamiento-de-pool-dhcp)
+- [Topología de laboratorio (VLANs, interfaces, direccionamiento)](#topología-de-laboratorio-vlans-interfaces-direccionamiento)
+- [Requisitos](#requisitos)
+- [Capturas de pantalla](#capturas-de-pantalla)
+- [Medidas de mitigación (Defensa)](#medidas-de-mitigación-defensa)
+- [Disclaimer](#disclaimer)
+
+---
+
+## 1) DHCP Rogue Server (Servidor DHCP falso)
+
+### Objetivo
+Simular un **servidor DHCP rogue** que responde más rápido que el servidor legítimo para que un cliente obtenga configuración manipulada (por ejemplo, **Gateway falso**), habilitando escenarios tipo **Man-in-the-Middle (MITM) a nivel L3**.
+
+### ¿Qué demuestra?
+- Qué pasa cuando un switch permite DHCP desde puertos no confiables.
+- Cómo se ve el tráfico DHCP cuando existe un rogue.
+- Por qué controles como **DHCP Snooping** son críticos.
+
+### Parámetros del script
+- `-i / --interface` (**requerido**): interfaz de red (ej. `eth0`)
+- `--server-ip`: IP del atacante/servidor falso (default `11.63.10.50`)
+- `--gateway-ip`: gateway anunciado por el rogue (default `11.63.10.50`)
+- `--dns-ip`: DNS anunciado (default `8.8.8.8`)
+
+> El script asigna IPs incrementales a víctimas y mantiene un mapeo `MAC → IP`.
+
+---
+
+## 2) STP Root Bridge Claim (Suplantación de Root Bridge)
+
+### Objetivo
+Enviar **BPDUs** con prioridad “ganadora” para intentar reclamar el rol de **Root Bridge** en STP, provocando que el tráfico L2 se reoriente (dependiendo de la topología), lo cual puede facilitar:
+- intercepción,
+- degradación de desempeño,
+- cambios en el árbol STP.
+
+### ¿Qué demuestra?
+- Impacto de una mala protección STP en puertos de acceso.
+- Importancia de **BPDU Guard**, **Root Guard** y hardening de STP.
+
+### Parámetros del script
+- `-i / --interface` (**requerido**): interfaz (ej. `eth0`)
+- `-p / --priority`: prioridad del bridge (default `0`)
+- `-t / --interval`: intervalo entre BPDUs en segundos (default `2.0`)
+- `-c / --count`: número total de BPDUs (0 = indefinido)
+
+> El script también incluye una verificación escuchando BPDUs para comprobar si el atacante aparece anunciado como Root.
+
+---
+
+## 3) DHCP Starvation (Agotamiento de pool DHCP)
+
+### Objetivo
+Simular un **DHCP Starvation**, enviando múltiples DHCP Discover con **MACs aleatorias**, con el fin de **agotar el pool** del servidor DHCP legítimo y causar denegación de servicio a nuevos clientes.
+
+### ¿Qué demuestra?
+- Cómo un atacante puede consumir leases si no hay controles.
+- Por qué se necesitan límites/seguridad en puertos de acceso.
+
+### Parámetros del script
+- `-i / --interface` (**requerido**): interfaz (ej. `eth0`)
+- `-c / --count`: cantidad de paquetes (0 = indefinido)
+- `-d / --delay`: delay entre paquetes en segundos (default `0.05`)
+
+---
+
+# Topología de laboratorio (VLANs, interfaces, direccionamiento)
+
+> Ajusta esta sección a tu topología real en PNETLab (o Packet Tracer/GNS3).  
+> Aquí te dejo una base **clara para documentar**.
+
+## Dispositivos sugeridos
+- **SW1 (L2)**: switch administrable con soporte STP, DHCP Snooping (ideal si es IOSvL2 o un switch real).
+- **DHCP-SRV (legítimo)**: servidor DHCP (Linux/Windows/Router).
+- **VICTIM-1 / VICTIM-2**: PCs cliente DHCP.
+- **ATTACKER (Kali/Ubuntu)**: host con Python3 + Scapy.
+
+## VLANs
+- **VLAN 10**: Usuarios/Lab (DHCP)
+- (Opcional) **VLAN 99**: Management
+
+## Puertos / Interfaces (ejemplo)
+- SW1 `Gi0/1` → DHCP-SRV (uplink/servidor)
+- SW1 `Gi0/2` → VICTIM-1
+- SW1 `Gi0/3` → VICTIM-2
+- SW1 `Gi0/4` → ATTACKER
+
+## Direccionamiento (ejemplo basado en tu script)
+- Red VLAN10: `11.63.10.0/24`
+- DHCP legítimo: `11.63.10.10`
+- Atacante: `11.63.10.50`
+- Gateway legítimo: `11.63.10.1`
+- **Gateway falso anunciado** (rogue): `11.63.10.50`
+
+---
+
+# Requisitos
+
+## Sistema
+- Linux (Kali/Ubuntu recomendado en laboratorio)
+- Acceso root (`sudo`) para sniffing y envío de paquetes raw
+
+## Dependencias
+- Python 3.x
+- Scapy
+- Colorama
+
+### Instalación (dependiendo de tu distro)
+```bash
+pip3 install scapy colorama
