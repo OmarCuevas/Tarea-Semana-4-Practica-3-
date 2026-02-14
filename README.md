@@ -6,6 +6,7 @@ Este repositorio contiene **herramientas educativas** desarrolladas con **Scapy*
 > No utilices estas herramientas en redes reales sin autorización formal. El objetivo es aprender cómo se ven estos ataques y **cómo mitigarlos**.
 
 ---
+<img width="1062" height="697" alt="image" src="https://github.com/user-attachments/assets/176c9766-3816-4f71-9562-a8172df1d2c3" />
 
 ## Contenido
 
