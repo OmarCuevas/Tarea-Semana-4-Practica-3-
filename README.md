@@ -119,7 +119,118 @@ Simular un **DHCP Starvation**, enviando múltiples DHCP Discover con **MACs ale
 - Python 3.x
 - Scapy
 - Colorama
+Medidas de mitigación (Defensa)
 
-### Instalación (dependiendo de tu distro)
-```bash
-pip3 install scapy colorama
+Esta sección resume cómo proteger la red contra los 3 escenarios.
+
+A) Mitigación contra DHCP Rogue Server
+1) DHCP Snooping (control principal)
+
+Marcar solo los puertos hacia el servidor DHCP como trusted
+
+Puertos de usuarios/PCs como untrusted
+
+Bloquea DHCP Offer/Ack no autorizados desde puertos untrusted
+
+Complementos recomendados
+
+DHCP Snooping binding table para validar clientes
+
+Guardar bindings en almacenamiento persistente si el switch lo soporta
+
+2) Dynamic ARP Inspection (DAI)
+
+Evita ARP spoofing usando la tabla de bindings (DHCP Snooping)
+
+Muy útil si el objetivo del rogue es preparar MITM
+
+3) IP Source Guard
+
+Restringe IP/MAC por puerto basado en bindings DHCP
+
+Previene suplantación IP desde hosts comprometidos
+
+4) Port Security (capa extra)
+
+Limitar MACs por puerto (ej. 1 o 2)
+
+Acción ante violación: restrict/shutdown (según política)
+
+5) Segmentación y control
+
+VLANs por rol (usuarios/infra/servers)
+
+ACLs y políticas L3 para reducir movimiento lateral
+
+B) Mitigación contra STP Root Bridge Claim
+1) BPDU Guard (en puertos de acceso)
+
+Si un puerto “de usuario” recibe BPDUs → se protege (err-disable/shutdown)
+
+Ideal para evitar que un host intente participar en STP
+
+2) Root Guard (en puertos donde NO debe aparecer un Root alterno)
+
+Evita que un switch aguas abajo reclame Root en enlaces donde no corresponde
+
+3) STP Hardening (buenas prácticas)
+
+Definir explícitamente el Root Bridge (prioridades controladas)
+
+Usar PortFast solo en puertos de acceso (con BPDU Guard)
+
+Documentar el diseño STP (qué switch es root, qué puertos son trunks)
+
+4) Control de acceso físico/lógico
+
+Puertos no usados: shutdown + VLAN “blackhole”
+
+802.1X (si aplica) para acceso autenticado
+
+C) Mitigación contra DHCP Starvation
+1) DHCP Snooping + Rate Limiting
+
+Muchos switches permiten limitar tasa DHCP en puertos untrusted
+
+Reduce la capacidad de inundación
+
+2) Port Security (muy efectivo aquí)
+
+Si el ataque usa muchas MACs aleatorias:
+
+limitar a 1-2 MAC por puerto
+
+bloquear cuando cambie/crezca el conteo
+
+3) Ajustes en el servidor DHCP
+
+Leases razonables (no excesivamente largos)
+
+Reservas por MAC para equipos críticos (donde aplique)
+
+Alertas/monitoreo por consumo anormal de pool
+
+4) Monitoreo y detección
+
+Alertar si:
+
+el pool baja rápidamente
+
+hay demasiados Discover por segundo
+
+hay “churn” excesivo de leases
+
+Disclaimer
+
+Este repositorio tiene fines académicos y defensivos, orientado a:
+
+comprender el ataque,
+
+capturar evidencias,
+
+validar controles (DHCP Snooping, BPDU Guard, etc.),
+
+y documentar resultados en un entorno controlado.
+
+El autor no se responsabiliza del uso indebido fuera de un laboratorio autorizado.
+
